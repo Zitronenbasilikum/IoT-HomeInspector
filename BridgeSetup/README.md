@@ -9,6 +9,5 @@ hostapd.conf    at 	/etc/hostapd.conf or /etc/hostapd/hostapd.conf
 sudo hostapd -dd /etc/hostapd.conf
 
 # Hostapd bei Systemstart
-# Pfad zur Konfigurationsdatei eintragen
 sudo nano /etc/init.d/hostapd
 	DAEMON_CONF=/etc/hostapd.conf 
