@@ -1,0 +1,22 @@
+# Local loopback
+auto lo
+iface lo inet loopback
+
+### Bridge Konfiguration
+auto eth0
+iface eth0 inet manual
+
+auto wlan0
+iface wlan0 inet manual
+
+auto br0
+iface br0 inet static
+address 192.168.1.100
+netmask 255.255.255.0
+gateway 192.168.1.1
+dns-nameservers 127.0.0.1 8.8.8.8
+bridge_ports eth0 wlan0
+bridge_fd 0
+bridge_stp off
+
+
