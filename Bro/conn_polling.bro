@@ -1,7 +1,7 @@
 # Load other scripts
 # @load ...
 @load base/protocols/conn/polling
-@load base/protocols/conn/main
+#@load base/protocols/conn/main
 
 # Module Name
 # module MyModule;
@@ -12,78 +12,114 @@ export{
  	## before rechecking them for whatever I'm checking them for.
  	const checkup_interval = 10sec;
 
+	# Create an ID for our new stream. By convention, this is
+    # called "LOG".
+    redef enum Log::ID += { LOG };
+
  	## connection data
 	type MyRec: record {
+		## Log index
+		index: count &optional &default=0 &log;
+		##
+		checkup_interval: interval &default=checkup_interval &log;
 		## This is the time of the first packet.
-		ts: time &optional &default=double_to_time(0);
+		ts: time &optional &default=double_to_time(0) &log;
 		##
-		orig_ip_bytes: count &optional &default=0;
+		orig_h: addr &optional &log;
 		##
-		resp_ip_bytes: count &optional &default=0;
+		resp_h:addr &optional &log;
 		##
-		duration: interval &optional &default=0secs;
+		orig_ip_bytes: count &optional &default=0 &log;
 		##
-		orig_p: set[port] &optional;
+		resp_ip_bytes: count &optional &default=0 &log;
 		##
-		resp_p: set[port] &optional;
+		duration: time &optional &default=double_to_time(0) &log;
+		##
+		orig_p: set[port] &optional &log;
+		##
+		resp_p: set[port] &optional &log;
 	};
 
-	# Table of orig/resp pair and connection data
+	## Index of every connection summary for better readability
+	global index: count = 0;
+	## Table of orig/resp pair and connection data
 	global conn_table: table[conn_id] of MyRec;
 }
 
-event ConnByteStream::write_to_log()
- 	{
- 	print "Write to log..............";
- 	# Write to log
-
- 	local ip_table: table[addr,addr] of MyRec; 
- 	for(id in conn_table)
+function summarize_connections():  table[addr,addr] of MyRec
 	{
-	# Konstrukt new table entry and initialize vars
-	if( [id$orig_h, id$resp_h] !in ip_table)
+	local ip_table: table[addr,addr] of MyRec; 
+ 	for(id in conn_table)
 		{
-		ip_table[id$orig_h, id$resp_h] = MyRec();
-		ip_table[id$orig_h, id$resp_h]$orig_p = set();
-		ip_table[id$orig_h, id$resp_h]$resp_p = set();
-		}
-	
-	# min ts, add bytes, max duration, add ports
-	local myRec: MyRec = ip_table[id$orig_h, id$resp_h];
-	
-	if( myRec$ts > conn_table[id]$ts )
-		{
-		myRec$ts = conn_table[id]$ts;
-		}
-	myRec$orig_ip_bytes += conn_table[id]$orig_ip_bytes;
-	myRec$resp_ip_bytes += conn_table[id]$resp_ip_bytes;
-	
-	if( myRec$duration < conn_table[id]$duration )
-		{
-		myRec$duration = conn_table[id]$duration;
-		}
-	
-	add myRec$orig_p[id$orig_p];
-	add myRec$resp_p[id$resp_p];
+		# Konstrukt new table entry and initialize vars
+		if( [id$orig_h, id$resp_h] !in ip_table)
+			{
+			ip_table[id$orig_h, id$resp_h] = MyRec();
+			ip_table[id$orig_h, id$resp_h]$orig_p = set();
+			ip_table[id$orig_h, id$resp_h]$resp_p = set();
+			}
+		
 
-	# Clean up conn_table
-	delete conn_table[id];
+		local myRec: MyRec = ip_table[id$orig_h, id$resp_h];
+		# index
+		myRec$index = index;
+		# min ts
+		if( myRec$ts > conn_table[id]$ts || myRec$ts==0 )
+			{
+			myRec$ts = conn_table[id]$ts;
+			}
+		# bytes
+		myRec$orig_ip_bytes += conn_table[id]$orig_ip_bytes;
+		myRec$resp_ip_bytes += conn_table[id]$resp_ip_bytes;
+		# max duration
+		if( myRec$duration < conn_table[id]$duration )
+			{
+			myRec$duration = conn_table[id]$duration;
+			}
+		# ip and ports
+		myRec$orig_h = id$orig_h;
+		add myRec$orig_p[id$orig_p];
+		myRec$resp_h = id$resp_h;
+		add myRec$resp_p[id$resp_p];
 
+		# Clean up conn table
+		delete conn_table[id];
+		}
+
+	return ip_table;
 	}
 
+event ConnByteStream::write_to_log()
+ 	{
+ 	# Summarize connection of IP pair
+ 	local ip_table: table[addr,addr] of MyRec; 
+ 	ip_table = ConnByteStream::summarize_connections();
+
+	# Write to log
 	for( [orig, resp] in ip_table )
 		{
-		print [orig,resp];
-		print ip_table[orig,resp];
+		Log::write(ConnByteStream::LOG, ip_table[orig,resp]);
 		}
 
-
+	# Set new index; and reset
+	if( index < 100)
+		{
+		index += 1;
+		}
+	else
+		{
+		index=0;
+		}
+	
 	# Reschedule this event.
  	schedule checkup_interval { ConnByteStream::write_to_log() };
  	}
 
-event bro_init()
+event bro_init() &priority=5
 	{
+	# Create the stream. This adds a default filter automatically.
+    Log::create_stream(ConnByteStream::LOG, [$columns=MyRec, $path="conn_polling"]);
+
 	# Write to log every second
 	# Schedule the event that does the check.
  	schedule checkup_interval { ConnByteStream::write_to_log() };
@@ -102,7 +138,7 @@ function polling_callback(c: connection, cnt: count): interval
 	myRec$ts = c$start_time;
 	myRec$orig_ip_bytes = c$orig$num_bytes_ip;
 	myRec$resp_ip_bytes = c$resp$num_bytes_ip;
-	myRec$duration = c$duration;	
+	myRec$duration = double_to_time(0) + c$duration;	
 
 	return checkup_interval;
 	}
